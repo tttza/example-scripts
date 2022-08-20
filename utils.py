@@ -5,6 +5,10 @@ from halo import Halo
 from pathlib import Path
 import json
 from scipy.stats import skew
+from pandarallel import pandarallel
+from tqdm.auto import tqdm
+
+pandarallel.initialize(progress_bar=False)
 
 ERA_COL = "era"
 TARGET_COL = "target_nomi_v4_20"
@@ -163,7 +167,7 @@ def get_feature_neutral_mean(df, prediction_col, target_col, features_for_neutra
         features_for_neutralization = [c for c in df.columns if c.startswith("feature")]
     df.loc[:, "neutral_sub"] = neutralize(df, [prediction_col],
                                           features_for_neutralization)[prediction_col]
-    scores = df.groupby("era").apply(
+    scores = df.groupby("era").parallel_apply(
         lambda x: (unif(x["neutral_sub"]).corr(x[target_col]))).mean()
     return np.mean(scores)
 
@@ -212,9 +216,10 @@ def validation_metrics(validation_data, pred_cols, example_col, fast_mode=False,
                         target_col=TARGET_COL, features_for_neutralization=None):
     validation_stats = pd.DataFrame()
     feature_cols = [c for c in validation_data if c.startswith("feature_")]
-    for pred_col in pred_cols:
+    for pred_col in tqdm(pred_cols):
+        print(pred_col)
         # Check the per-era correlations on the validation set (out of sample)
-        validation_correlations = validation_data.groupby(ERA_COL).apply(
+        validation_correlations = validation_data.groupby(ERA_COL).parallel_apply(
             lambda d: unif(d[pred_col]).corr(d[target_col]))
 
         mean = validation_correlations.mean()
@@ -247,7 +252,7 @@ def validation_metrics(validation_data, pred_cols, example_col, fast_mode=False,
 
         if not fast_mode:
             # Check the feature exposure of your validation predictions
-            max_per_era = validation_data.groupby(ERA_COL).apply(
+            max_per_era = validation_data.groupby(ERA_COL).parallel_apply(
                 lambda d: d[feature_cols].corrwith(d[pred_col]).abs().max())
             max_feature_exposure = max_per_era.mean()
             validation_stats.loc["max_feature_exposure", pred_col] = max_feature_exposure
@@ -258,7 +263,7 @@ def validation_metrics(validation_data, pred_cols, example_col, fast_mode=False,
             validation_stats.loc["feature_neutral_mean", pred_col] = feature_neutral_mean
 
             # Check TB200 feature neutral mean
-            tb200_feature_neutral_mean_era = validation_data.groupby(ERA_COL).apply(lambda df: \
+            tb200_feature_neutral_mean_era = validation_data.groupby(ERA_COL).parallel_apply(lambda df: \
                                             get_feature_neutral_mean_tb_era(df, pred_col,
                                                                             target_col, 200,
                                                                             features_for_neutralization))
@@ -298,12 +303,12 @@ def validation_metrics(validation_data, pred_cols, example_col, fast_mode=False,
         validation_stats.loc["corr_plus_mmc_sharpe", pred_col] = corr_plus_mmc_sharpe
 
         # Check correlation with example predictions
-        per_era_corrs = validation_data.groupby(ERA_COL).apply(lambda d: unif(d[pred_col]).corr(unif(d[example_col])))
+        per_era_corrs = validation_data.groupby(ERA_COL).parallel_apply(lambda d: unif(d[pred_col]).corr(unif(d[example_col])))
         corr_with_example_preds = per_era_corrs.mean()
         validation_stats.loc["corr_with_example_preds", pred_col] = corr_with_example_preds
 
-        #Check exposure dissimilarity per era
-        tdf = validation_data.groupby(ERA_COL).apply(lambda df: \
+        # Check exposure dissimilarity per era
+        tdf = validation_data.groupby(ERA_COL).parallel_apply(lambda df: \
                                                 exposure_dissimilarity_per_era(df, pred_col,
                                                 example_col, feature_cols))
         validation_stats.loc["exposure_dissimilarity_mean", pred_col] = tdf.mean()
